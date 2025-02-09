@@ -1,0 +1,295 @@
+#### load libraries
+
+```{r}
+suppressPackageStartupMessages(library(tidyverse))
+suppressPackageStartupMessages(library(tximport))
+suppressPackageStartupMessages(library(DESeq2))
+suppressPackageStartupMessages(library(readxl))
+suppressPackageStartupMessages(library(PCAtools))
+suppressPackageStartupMessages(library(ggrepel))
+suppressPackageStartupMessages(library(clusterProfiler))
+source("/project/imoskowitz/shared/software/helper_functions/carlosFunc_3.R")
+source("/project/imoskowitz/shared/software/helper_functions/rowr.R")
+
+```
+
+#### create directories
+```{r}
+dir.create("pdfs", mode = "750")
+dir.create("data", mode = "750")
+dir.create("code", mode = "750")
+```
+
+#### import data
+```{r}
+txi <- salmon_import("/project/imoskowitz/shared/sequencing.processed/141022_BHARLMADXX_IM-JS1/star_salmon")
+```
+
+#### import metadata
+```{r}
+
+metadata  <- load_metadata("/project/imoskowitz/shared/metasheets/sample_sheets/MR016_141022_BHARLMADXX_IM-JS1_Sample_metasheet_v18.xlsx")
+
+metadata <- metadata[match(colnames(txi[[2]]), rownames(metadata)), ]
+
+
+```
+
+#### create DESeq2 object
+```{r}
+dds <- DESeqDataSetFromTximport(txi, metadata, design = ~ condition)
+dds <- DESeq(dds)
+vst <- varianceStabilizingTransformation(dds)
+res <- get_deseq_results(dds, contrast="condition", 
+treatment="ShhKO_pSHF_E10.5", control="ShhWT_pSHF_E10.5")
+
+```
+
+#### PCA and sample correlations
+```{r}
+pca <- assay(vst)
+pca <- PCAtools::pca(pca, metadata = metadata, removeVar = 0.9)
+
+PCAtools::biplot(pca, colby = "time_condition",
+                legendPosition = "right",
+                pointSize = 3,
+                labSize = 3)
+
+ggsave(filename = "pca_biplot_time_condition.pdf",
+       plot = last_plot(),
+       device = "pdf",
+       width = 8, height = 5,
+       path = "pdfs")
+dev.off()
+
+pdf(file = "pdfs/heatmap_sample_cor.pdf", height = 5, width = 8)
+assay(vst) |>
+  cor() |>
+  pheatmap::pheatmap(scale = "none",
+                     display_numbers = T,
+                     annotation_row = metadata["time_condition"],
+                     annotation_col = metadata["time_condition"])
+dev.off()
+
+
+```
+
+#### plot volcano and save results
+```{r}
+gg_volcano3(res,
+abs_lfc = 0,
+p.cutoff = 0.05,
+up.color = "darkseagreen",
+down.color = "green") +
+gg_geneLabel4(res,
+gene_col = "gene_id",
+colorText = "black",
+plotGenes = c("Foxf1",'Gli1', 'Hhip', 'Ptch1')) +
+theme_minimal(base_size = 16) +
+annotate(
+      geom = "text",
+      x = c(-Inf, Inf),
+      y = c(Inf, Inf),
+      hjust = c(-0.5, 1.5),
+      vjust = c(2, 2),
+      label = c(nrow(subset(res, log2FoldChange < 0 & padj < 0.05)),
+                nrow(subset(res, log2FoldChange > 0 & padj < 0.05))),
+      size = 6
+) +
+ggtitle("pSHF_E10.5 ShhKO/ShhWT")
+  
+ggsave(filename = "pdfs/volcano_ShhKO_pSHF_E10.5_v_ShhWT_pSHF_E10.5.pdf",
+plot = last_plot(),
+device = "pdf",
+width = 5, height = 5)
+dev.off()
+
+x <- runGO(test.vector = subset(res, padj < 0.05 & log2FoldChange > 0)$gene_id,
+univr_vector = res$gene_id,
+ont = "BP",
+organism = 'mouse',
+simplify = TRUE)
+    
+plotGO(obj = x,
+topTerms = 5,
+muhcolor = "darkseagreen",
+strWrap = 30,
+barWidth = 0.5,
+expandY = c(0.1,0)) +
+theme_minimal(base_size = 16)
+    
+ggsave(filename = "pdfs/GO_BP_ShhKO_pSHF_E10.5_v_ShhWT_pSHF_E10.5_up.pdf",
+plot = last_plot(),
+device = "pdf",
+width = 7, height = 5)
+dev.off()
+
+
+y <- runGO(test.vector = subset(res, padj < 0.05 & log2FoldChange < 0)$gene_id,
+univr_vector = res$gene_id,
+ont = "BP",
+organism = 'mouse',
+simplify = TRUE)
+
+plotGO(obj = y,
+topTerms = 5,
+muhcolor = "green",
+strWrap = 30,
+barWidth = 0.5,
+expandY = c(0.1,0)) +
+theme_minimal(base_size = 16)
+
+ggsave(filename = "pdfs/GO_BP_ShhKO_pSHF_E10.5_v_ShhWT_pSHF_E10.5_down.pdf",
+plot = last_plot(),
+device = "pdf",
+width = 7, height = 5)
+dev.off()
+
+write.csv(res, "data/Table_DESeq2_ShhKO_pSHF_E10.5_v_ShhWT_pSHF_E10.5.csv")
+
+write.csv(
+  data.frame(y),
+  "data/Table_GO_BP_down_padj0.05.csv")
+
+write.csv(
+  data.frame(x),
+  "data/Table_GO_BP_up_padj0.05.csv")
+
+```
+
+
+
+##### do it all again with out samples MR016_JS4, MR016_JS6 and MR016_JS7
+
+```{r}
+
+metadata <- metadata[!rownames(metadata) %in% c("MR016_JS4", "MR016_JS6", "MR016_JS7"), ]
+
+txi[1:3] <- lapply(txi[1:3], function(x) x[ , colnames(x) %in% rownames(metadata)])
+
+metadata <- metadata[match(colnames(txi[[2]]), rownames(metadata)), ]
+```
+
+#### create DESeq2 object
+```{r}
+dds <- DESeqDataSetFromTximport(txi, metadata, design = ~ condition)
+dds <- DESeq(dds)
+vst <- varianceStabilizingTransformation(dds)
+res <- get_deseq_results(dds, contrast="condition", 
+treatment="ShhKO_pSHF_E10.5", control="ShhWT_pSHF_E10.5")
+```
+
+#### PCA and sample correlations
+```{r}
+pca <- assay(vst)
+pca <- PCAtools::pca(pca, metadata = metadata, removeVar = 0.9)
+
+PCAtools::biplot(pca, colby = "time_condition",
+                legendPosition = "right",
+                pointSize = 3,
+                labSize = 3)
+
+ggsave(filename = "pca_biplot_time_condition_no_JS4_JS6_JS7.pdf",
+       plot = last_plot(),
+       device = "pdf",
+       width = 8, height = 5,
+       path = "pdfs")
+dev.off()
+
+pdf(file = "pdfs/heatmap_sample_cor_no_JS4_JS6_JS7.pdf", height = 5, width = 8)
+assay(vst) |>
+  cor() |>
+  pheatmap::pheatmap(scale = "none",
+                     display_numbers = T,
+                     annotation_row = metadata["time_condition"],
+                     annotation_col = metadata["time_condition"])
+dev.off()
+
+
+```
+
+
+
+#### plot volcano GO, and save results
+```{r}
+gg_volcano3(res,
+abs_lfc = 0,
+p.cutoff = 0.05,
+up.color = "darkseagreen",
+down.color = "green") +
+gg_geneLabel4(res,
+gene_col = "gene_id",
+colorText = "black",
+plotGenes = c("Foxf1",'Gli1', 'Hhip', 'Ptch1')) +
+theme_minimal(base_size = 16) +
+annotate(
+      geom = "text",
+      x = c(-Inf, Inf),
+      y = c(Inf, Inf),
+      hjust = c(-0.5, 1.5),
+      vjust = c(2, 2),
+      label = c(nrow(subset(res, log2FoldChange < 0 & padj < 0.05)),
+                nrow(subset(res, log2FoldChange > 0 & padj < 0.05))),
+      size = 6
+) +
+ggtitle("pSHF_E10.5 ShhKO/ShhWT")
+  
+ggsave(filename = "pdfs/volcano_ShhKO_pSHF_E10.5_v_ShhWT_pSHF_E10.5_no_JS4_JS6_JS7.pdf",
+plot = last_plot(),
+device = "pdf",
+width = 5, height = 5)
+dev.off()
+
+x <- runGO(test.vector = subset(res, padj < 0.05 & log2FoldChange > 0)$gene_id,
+univr_vector = res$gene_id,
+ont = "BP",
+organism = 'mouse',
+simplify = TRUE)
+    
+plotGO(obj = x,
+topTerms = 5,
+muhcolor = "darkseagreen",
+strWrap = 30,
+barWidth = 0.5,
+expandY = c(0.1,0)) +
+theme_minimal(base_size = 16)
+    
+ggsave(filename = "pdfs/GO_BP_ShhKO_pSHF_E10.5_v_ShhWT_pSHF_E10.5_no_JS4_JS6_JS7_up.pdf",
+plot = last_plot(),
+device = "pdf",
+width = 7, height = 5)
+dev.off()
+
+
+y <- runGO(test.vector = subset(res, padj < 0.05 & log2FoldChange < 0)$gene_id,
+univr_vector = res$gene_id,
+ont = "BP",
+organism = 'mouse',
+simplify = TRUE)
+
+plotGO(obj = y,
+topTerms = 5,
+muhcolor = "green",
+strWrap = 30,
+barWidth = 0.5,
+expandY = c(0.1,0)) +
+theme_minimal(base_size = 16)
+
+ggsave(filename = "pdfs/GO_BP_ShhKO_pSHF_E10.5_v_ShhWT_pSHF_E10.5_no_JS4_JS6_JS7_down.pdf",
+plot = last_plot(),
+device = "pdf",
+width = 7, height = 5)
+dev.off()
+
+write.csv(res, "data/Table_DESeq2_ShhKO_pSHF_E10.5_v_ShhWT_pSHF_E10.5_no_JS4_JS6_JS7.csv")
+
+write.csv(
+  data.frame(y),
+  "data/Table_GO_BP_down_padj0.05_no_JS4_JS6_JS7.csv")
+
+write.csv(
+  data.frame(x),
+  "data/Table_GO_BP_up_padj0.05_no_JS4_JS6_JS7.csv")
+
+```
+
